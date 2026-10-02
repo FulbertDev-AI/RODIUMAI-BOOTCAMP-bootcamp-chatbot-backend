@@ -1,0 +1,10 @@
+[project]
+name = "bootcamp-chatbot-backend"
+version = "0.1.0"
+description = "Study Buddy chatbot backend (FastAPI)"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi[standard]>=0.142.2",
+    "httpx>=0.28.1",
+    "python-dotenv>=1.2.4",
+]
