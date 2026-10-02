@@ -19,6 +19,12 @@ RODIUMAI_API_KEY = os.environ["RODIUMAI_API_KEY"]
 MODEL = os.getenv("RODIUMAI_MODEL", "anthropic/claude-sonnet-4-5-20250929")
 PREVIEW_LENGTH = 60
 
+# Roles the LLM understands. Anything else stored in the DB (e.g. notifications) stays out of its prompt.
+LLM_ROLES = {"user", "assistant"}
+NOTIFICATION_ROLE = "system-notification"
+NOTIFICATION_EVERY = 10  # a notification each time the dialogue reaches a multiple of this many messages
+NOTIFICATION_TEXT = "Une dizaine de messages écrits."
+
 SYSTEM_PROMPT = (
     "Tu es Study Buddy, un tuteur bienveillant pour les étudiants."
     "Réponds aux questions de manière claire et concise."
@@ -44,6 +50,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
+    notification: str | None = None  # set when this turn also stored a system-notification
 
 
 class MessageResponse(BaseModel):
@@ -62,6 +69,12 @@ def load_messages(db: Session, conversation_id: int) -> list[Message]:
         .where(Message.conversation_id == conversation_id)
         .order_by(Message.seq)
     ).all()
+
+
+def build_llm_history(rows: list[Message]) -> list[dict]:
+    # The DB history is not necessarily what the LLM sees: filter it here, just before building the request.
+    # For now we only drop the roles the LLM doesn't know (system-notification).
+    return [{"role": m.role, "content": m.content} for m in rows if m.role in LLM_ROLES]
 
 
 @app.post("/conversations", status_code=201)
@@ -102,7 +115,8 @@ def list_messages(conversation_id: int, db: Session = Depends(get_db)) -> list[M
 def chat(req: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
     # Load this conversation from the database, in message order.
     rows = load_messages(db, req.conversation_id)
-    history = [{"role": m.role, "content": m.content} for m in rows]
+    history = build_llm_history(rows)
+    # seq follows every stored row (notifications included) so it stays unique.
     next_seq = rows[-1].seq + 1 if rows else 1
     user_message = {"role": "user", "content": req.message}
 
@@ -132,6 +146,16 @@ def chat(req: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
         Message(conversation_id=req.conversation_id, seq=next_seq, role="user", content=req.message),
         Message(conversation_id=req.conversation_id, seq=next_seq + 1, role="assistant", content=reply),
     ])
+
+    # Count only the dialogue (user + assistant): counting notifications too would shift the total
+    # off the multiples of 10 for good after the first one.
+    notification = None
+    if (len(history) + 2) % NOTIFICATION_EVERY == 0:
+        notification = NOTIFICATION_TEXT
+        db.add(Message(
+            conversation_id=req.conversation_id, seq=next_seq + 2, role=NOTIFICATION_ROLE, content=notification
+        ))
+
     try:
         db.commit()
     except IntegrityError:
@@ -141,4 +165,4 @@ def chat(req: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
             status_code=409, detail="The conversation was updated concurrently, please retry."
         )
     print(history)
-    return ChatResponse(reply=reply)
+    return ChatResponse(reply=reply, notification=notification)
