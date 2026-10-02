@@ -1,10 +1,11 @@
 import os
+from datetime import datetime
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -16,6 +17,7 @@ load_dotenv()
 RODIUMAI_URL = "https://api.rodiumai.io/v1/chat/completions"
 RODIUMAI_API_KEY = os.environ["RODIUMAI_API_KEY"]
 MODEL = os.getenv("RODIUMAI_MODEL", "anthropic/claude-sonnet-4-5-20250929")
+PREVIEW_LENGTH = 60
 
 SYSTEM_PROMPT = (
     "Tu es Study Buddy, un tuteur bienveillant pour les étudiants."
@@ -29,6 +31,12 @@ class ConversationResponse(BaseModel):
     conversation_id: int
 
 
+class ConversationSummary(BaseModel):
+    id: int
+    created_at: datetime
+    preview: str | None  # first user message, truncated; None while the conversation is empty
+
+
 class ChatRequest(BaseModel):
     conversation_id: int
     message: str
@@ -36,6 +44,24 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
+
+
+class MessageResponse(BaseModel):
+    seq: int
+    role: str
+    content: str
+    created_at: datetime
+
+
+def load_messages(db: Session, conversation_id: int) -> list[Message]:
+    # A conversation's messages in order; 404 if the conversation doesn't exist.
+    if db.get(Conversation, conversation_id) is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return db.scalars(
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .order_by(Message.seq)
+    ).all()
 
 
 @app.post("/conversations", status_code=201)
@@ -46,17 +72,36 @@ def create_conversation(db: Session = Depends(get_db)) -> ConversationResponse:
     return ConversationResponse(conversation_id=conversation.id)
 
 
+@app.get("/conversations")
+def list_conversations(db: Session = Depends(get_db)) -> list[ConversationSummary]:
+    # Newest first, each joined to its first message (seq 1, always the user's) for the preview.
+    rows = db.execute(
+        select(Conversation, Message.content)
+        .outerjoin(Message, and_(Message.conversation_id == Conversation.id, Message.seq == 1))
+        .order_by(Conversation.id.desc())
+    ).all()
+    return [
+        ConversationSummary(
+            id=conversation.id,
+            created_at=conversation.created_at,
+            preview=content[:PREVIEW_LENGTH] if content else None,
+        )
+        for conversation, content in rows
+    ]
+
+
+@app.get("/conversations/{conversation_id}/messages")
+def list_messages(conversation_id: int, db: Session = Depends(get_db)) -> list[MessageResponse]:
+    return [
+        MessageResponse(seq=m.seq, role=m.role, content=m.content, created_at=m.created_at)
+        for m in load_messages(db, conversation_id)
+    ]
+
+
 @app.post("/chat")
 def chat(req: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
-    if db.get(Conversation, req.conversation_id) is None:
-        raise HTTPException(status_code=404, detail="Conversation not found.")
-
     # Load this conversation from the database, in message order.
-    rows = db.scalars(
-        select(Message)
-        .where(Message.conversation_id == req.conversation_id)
-        .order_by(Message.seq)
-    ).all()
+    rows = load_messages(db, req.conversation_id)
     history = [{"role": m.role, "content": m.content} for m in rows]
     next_seq = rows[-1].seq + 1 if rows else 1
     user_message = {"role": "user", "content": req.message}
