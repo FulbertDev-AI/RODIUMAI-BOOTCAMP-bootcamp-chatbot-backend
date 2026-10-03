@@ -1,17 +1,17 @@
 # RodiumAI Bootcamp : session 4
 
-## v1-keep-history
+## Lancer le serveur
 
 Toutes les commandes se lancent depuis la racine du projet.
 
 ```bash
 uv sync                     
-cp .env.example .env        
+cp .env.example .env  # Et mettre à jour les variables environement (modèle et clé api)   
 uv run alembic upgrade head
 uv run fastapi dev main.py
 ```
 
-### Utiliser PostgreSQL au lieu de SQLite
+## Utiliser PostgreSQL au lieu de SQLite
 
 Grâce à SQLAlchemy, seule la connexion change : `models.py`, `main.py` et les migrations Alembic restent identiques.
 

@@ -23,7 +23,7 @@ PREVIEW_LENGTH = 60
 LLM_ROLES = {"user", "assistant"}
 NOTIFICATION_ROLE = "system-notification"
 NOTIFICATION_EVERY = 10  # a notification each time the dialogue reaches a multiple of this many messages
-NOTIFICATION_TEXT = "Une dizaine de messages écrits."
+NOTIFICATION_TEXT = "Notification système : Une dizaine de messages écrits."
 
 SYSTEM_PROMPT = (
     "Tu es Study Buddy, un tuteur bienveillant pour les étudiants."
