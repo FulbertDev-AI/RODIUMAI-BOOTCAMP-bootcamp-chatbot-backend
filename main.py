@@ -242,12 +242,14 @@ def _chat_sse(
     # Accumulate assistant text in memory only. Persist user/assistant/notification after a
     # complete upstream stream AND a successful commit; only then emit type=done.
     parts: list[str] = []
+    usage_holder: dict = {"usage": None}
     try:
         for content in iter_rodium_deltas(
             messages,
             url=RODIUMAI_URL,
             api_key=RODIUMAI_API_KEY,
             model=model,
+            usage_holder=usage_holder,
         ):
             parts.append(content)
             yield format_sse({"type": "delta", "content": content})
@@ -296,7 +298,14 @@ def _chat_sse(
         yield format_sse(SSE_DONE)
         return
 
-    yield format_sse({"type": "done", "reply": reply, "notification": notification})
+    yield format_sse(
+        {
+            "type": "done",
+            "reply": reply,
+            "notification": notification,
+            "usage": usage_holder["usage"],
+        }
+    )
     yield format_sse(SSE_DONE)
 
 

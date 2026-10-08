@@ -18,6 +18,36 @@ def format_sse(data: dict | str) -> str:
     return f"data: {payload}\n\n"
 
 
+def normalize_usage(raw: object) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    prompt = raw.get("prompt_tokens")
+    completion = raw.get("completion_tokens")
+    total = raw.get("total_tokens")
+    if not all(isinstance(value, int) and not isinstance(value, bool) for value in (prompt, completion, total)):
+        return None
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": total,
+    }
+
+
+def usage_from_sse_line(line: str) -> dict | None:
+    if not line or not line.startswith("data:"):
+        return None
+    payload = line[5:].strip()
+    if payload == SSE_DONE:
+        return None
+    try:
+        chunk = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(chunk, dict):
+        return None
+    return normalize_usage(chunk.get("usage"))
+
+
 def parse_rodium_sse_line(line: str) -> tuple[str, str | None]:
     """Classify one upstream SSE line: skip | done | content."""
     if not line or line.startswith(":"):
@@ -47,8 +77,10 @@ def iter_rodium_deltas(
     url: str,
     api_key: str,
     model: str,
+    usage_holder: dict | None = None,
 ):
     """Yield assistant text fragments from a RodiumAI stream=true completion."""
+    last_usage = None
     try:
         with httpx.stream(
             "POST",
@@ -66,6 +98,9 @@ def iter_rodium_deltas(
                 raise LLMStreamError("The LLM API call failed.")
             finished = False
             for line in response.iter_lines():
+                parsed_usage = usage_from_sse_line(line)
+                if parsed_usage is not None:
+                    last_usage = parsed_usage
                 kind, value = parse_rodium_sse_line(line)
                 if kind == "skip":
                     continue
@@ -77,3 +112,5 @@ def iter_rodium_deltas(
                 raise LLMStreamInterrupted()
     except httpx.HTTPError as exc:
         raise LLMStreamError("The LLM API call failed.") from exc
+    if usage_holder is not None:
+        usage_holder["usage"] = last_usage

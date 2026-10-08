@@ -53,7 +53,12 @@ def test_streaming_success_persists_user_and_assistant(client, monkeypatch):
     assert events[0] == {"type": "delta", "content": "Bonjour"}
     assert events[1] == {"type": "delta", "content": " "}
     assert events[2] == {"type": "delta", "content": "étudiant"}
-    assert events[3] == {"type": "done", "reply": "Bonjour étudiant", "notification": None}
+    assert events[3] == {
+        "type": "done",
+        "reply": "Bonjour étudiant",
+        "notification": None,
+        "usage": None,
+    }
     assert events[4] == "[DONE]"
     assert not any(isinstance(e, dict) and e.get("type") == "error" for e in events)
 
