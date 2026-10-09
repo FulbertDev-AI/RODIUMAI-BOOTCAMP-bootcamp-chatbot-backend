@@ -1,7 +1,12 @@
 import json
 
 from database.models import Conversation, Message
-from llm_stream import LLMStreamError, LLMStreamInterrupted, parse_rodium_sse_line
+from llm_stream import (
+    LLMStreamCancelled,
+    LLMStreamError,
+    LLMStreamInterrupted,
+    parse_rodium_sse_line,
+)
 from main import NOTE_ROLE, NOTIFICATION_ROLE, NOTIFICATION_TEXT, load_system_prompt
 
 
@@ -107,6 +112,27 @@ def test_interrupted_stream_before_done_persists_nothing(client, monkeypatch):
 
     stored = client.get(f"/conversations/{conversation_id}/messages").json()
     assert stored == []
+
+
+def test_cancelled_generation_is_not_persisted(client, monkeypatch):
+    def fake_deltas(messages, **kwargs):
+        yield "Bonjour"
+        raise LLMStreamCancelled()
+
+    monkeypatch.setattr("main.iter_rodium_deltas", fake_deltas)
+
+    conversation_id = client.post("/conversations").json()["conversation_id"]
+    client.post(
+        f"/conversations/{conversation_id}/notes",
+        json={"content": "déjà là"},
+    )
+    status, body = _stream_chat(client, conversation_id, "Salut")
+    assert status == 200
+    events = _parse_sse_body(body)
+    assert events[0] == {"type": "delta", "content": "Bonjour"}
+    assert not any(isinstance(e, dict) and e.get("type") == "done" for e in events)
+    stored = client.get(f"/conversations/{conversation_id}/messages").json()
+    assert [(m["role"], m["content"]) for m in stored] == [("note", "déjà là")]
 
 
 def test_note_excluded_from_llm_and_notification_counter(

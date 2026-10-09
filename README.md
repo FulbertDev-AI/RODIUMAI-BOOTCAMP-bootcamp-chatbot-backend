@@ -4,8 +4,8 @@ API FastAPI du tuteur Python **Study Buddy**. Elle persiste les conversations, f
 
 Le frontend est un dépôt **séparé** (React + TypeScript + Vite) :
 
-- Backend : [https://github.com/JeanKouss/bootcamp-chatbot-backend](https://github.com/JeanKouss/bootcamp-chatbot-backend)
-- Frontend : [https://github.com/JeanKouss/bootcamp-chatbot-frontend](https://github.com/JeanKouss/bootcamp-chatbot-frontend)
+- Backend : [https://github.com/FulbertDev-AI/RODIUMAI-BOOTCAMP-bootcamp-chatbot-backend.git](https://github.com/FulbertDev-AI/RODIUMAI-BOOTCAMP-bootcamp-chatbot-backend.git)
+- Frontend : [https://github.com/FulbertDev-AI/RODIUMAI-BOOTCAMP-bootcamp-chatbot-frontend.git](https://github.com/FulbertDev-AI/RODIUMAI-BOOTCAMP-bootcamp-chatbot-frontend.git)
 
 Les deux projets ne partagent pas le même dossier. L’interface (notes, streaming, sélecteur de modèle, Retry, Stop) vit dans le dépôt **frontend**. Ce dépôt n’expose que l’API : le navigateur l’appelle (directement ou via le proxy Vite `/api`) ; la clé RodiumAI reste ici.
 
@@ -213,22 +213,20 @@ Base locale : `http://127.0.0.1:8000` (docs : `/docs`).
 
 - Python **3.14** (voir `.python-version`)
 - [uv](https://docs.astral.sh/uv/)
-- Une base SQLAlchemy (ex. SQLite ou MySQL). `DATABASE_URL` est **obligatoire**. Le driver déclaré est **PyMySQL** ; SQLite fonctionne aussi si l’URL le précise.
+- **PostgreSQL** (SQLAlchemy + driver `psycopg`). `DATABASE_URL` est **obligatoire**.
 
 ```bash
 uv sync
 cp .env.example .env
 ```
 
-Compléter `.env` (aucune vraie clé ci-dessous) :
+Compléter `.env` (aucune vraie clé ni mot de passe de production ci-dessous) :
 
 ```
 RODIUMAI_API_KEY=rd_sk_YOUR_KEY
 RODIUMAI_MODEL=openai/gpt-4o
-DATABASE_URL=sqlite:///chat.db
+DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/study_buddy
 ```
-
-MySQL local, exemple de forme : `mysql+pymysql://USER:PASSWORD@localhost:3306/chatbot`.
 
 `RODIUMAI_MODEL` est optionnel ; s’il est présent, il doit être l’un des cinq ids autorisés.
 
@@ -239,7 +237,36 @@ uv run fastapi dev main.py
 
 UI OpenAPI : [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs).
 
-Pour PostgreSQL, SQLAlchemy permet de changer surtout l’URL (et d’ajouter un driver, ex. `psycopg`) : les modèles et migrations restent les mêmes.
+### PostgreSQL local
+
+1. Installer PostgreSQL et s’assurer que le serveur écoute (souvent le port `5432`).
+2. Créer une base vide, par exemple `study_buddy` (et un utilisateur si besoin) :
+
+```sql
+CREATE DATABASE study_buddy;
+```
+
+3. Mettre `DATABASE_URL` dans `.env` :
+
+`postgresql+psycopg://USER:PASSWORD@HOST:PORT/DATABASE`
+
+Exemple local : `postgresql+psycopg://postgres:postgres@localhost:5432/study_buddy`
+
+4. Migrations :
+
+```bash
+uv run alembic upgrade head
+```
+
+5. Backend :
+
+```bash
+uv run fastapi dev main.py
+```
+
+6. Tests (voir ci-dessous).
+
+Le backend utilise **SQLAlchemy 2** et **psycopg** (v3). Les modèles et les révisions Alembic existantes ciblent PostgreSQL (`CURRENT_TIMESTAMP` SQL standard). La 2ᵉ migration vide `messages` puis ajoute `conversation_id`, `seq`, l’index, l’unicité `(conversation_id, seq)` et la FK.
 
 ---
 
@@ -249,7 +276,16 @@ Pour PostgreSQL, SQLAlchemy permet de changer surtout l’URL (et d’ajouter un
 uv run pytest -v
 ```
 
-Dernière exécution dans cet environnement : **29 passed** (notes, prompt, streaming, modèles, `usage`). Un warning Starlette/httpx (`httpx2`) vient du `TestClient`, pas des tests métier.
+La suite HTTP/SSE (`tests/test_notes.py`, streaming, modèles, prompt, `usage`) utilise une base **SQLite en mémoire** via une dépendance FastAPI surchargée (`tests/conftest.py`). Elle ne nécessite pas PostgreSQL et vérifie le métier sans appeler une base réelle.
+
+Les contrôles de dialecte PostgreSQL sont dans `tests/test_postgres.py`. Pour une vérif **live** (connexion + schéma après `alembic upgrade head`) :
+
+```bash
+set TEST_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/study_buddy
+uv run pytest -v tests/test_postgres.py
+```
+
+(Linux/macOS : `export TEST_DATABASE_URL=...`)
 
 ---
 

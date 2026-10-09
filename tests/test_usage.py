@@ -1,28 +1,52 @@
+import asyncio
+
 import httpx
 
 from llm_stream import LLMStreamError, iter_rodium_deltas, normalize_usage
 from tests.test_streaming import _parse_sse_body, _stream_chat
 
 
-def test_done_includes_usage_from_last_chunk(client, monkeypatch):
+def _patch_async_stream(monkeypatch, lines: list[str], seen: dict | None = None):
     class FakeResponse:
         status_code = 200
 
-        def iter_lines(self):
-            yield 'data: {"choices":[{"delta":{"content":"Bonjour"}}]}'
-            yield (
-                'data: {"choices":[{"delta":{}}],'
-                '"usage":{"prompt_tokens":100,"completion_tokens":25,"total_tokens":125}}'
-            )
-            yield "data: [DONE]"
+        async def aiter_lines(self):
+            for line in lines:
+                yield line
 
-        def __enter__(self):
+        async def __aenter__(self):
             return self
 
-        def __exit__(self, *args):
+        async def __aexit__(self, *args):
             return False
 
-    monkeypatch.setattr(httpx, "stream", lambda *args, **kwargs: FakeResponse())
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def stream(self, method, url, **kwargs):
+            if seen is not None:
+                seen["json"] = kwargs.get("json")
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+
+def test_done_includes_usage_from_last_chunk(client, monkeypatch):
+    _patch_async_stream(
+        monkeypatch,
+        [
+            'data: {"choices":[{"delta":{"content":"Bonjour"}}]}',
+            'data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":25}}',
+            "data: [DONE]",
+        ],
+    )
 
     conversation_id = client.post("/conversations").json()["conversation_id"]
     status, body = _stream_chat(client, conversation_id, "Salut")
@@ -56,28 +80,29 @@ def test_done_usage_null_when_absent(client, monkeypatch):
 
 def test_partial_or_invalid_usage_becomes_null():
     assert normalize_usage({"prompt_tokens": 100}) is None
-    assert normalize_usage({"prompt_tokens": 100, "completion_tokens": 25}) is None
     assert normalize_usage({"prompt_tokens": "100", "completion_tokens": 25, "total_tokens": 125}) is None
     assert normalize_usage(None) is None
     assert normalize_usage("nope") is None
 
 
+def test_usage_without_total_tokens_is_normalized():
+    # RodiumAI stream example: usage chunk may omit total_tokens.
+    assert normalize_usage({"prompt_tokens": 100, "completion_tokens": 25}) == {
+        "prompt_tokens": 100,
+        "completion_tokens": 25,
+        "total_tokens": 125,
+    }
+
+
 def test_invalid_usage_in_stream_does_not_fail_chat(client, monkeypatch):
-    class FakeResponse:
-        status_code = 200
-
-        def iter_lines(self):
-            yield 'data: {"choices":[{"delta":{"content":"Hi"}}]}'
-            yield 'data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":100}}'
-            yield "data: [DONE]"
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-    monkeypatch.setattr(httpx, "stream", lambda *args, **kwargs: FakeResponse())
+    _patch_async_stream(
+        monkeypatch,
+        [
+            'data: {"choices":[{"delta":{"content":"Hi"}}]}',
+            'data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":100}}',
+            "data: [DONE]",
+        ],
+    )
 
     conversation_id = client.post("/conversations").json()["conversation_id"]
     status, body = _stream_chat(client, conversation_id, "Salut")
@@ -111,38 +136,30 @@ def test_error_after_deltas_has_no_done_usage_or_persist(client, monkeypatch):
 
 
 def test_iter_rodium_deltas_keeps_last_valid_usage(monkeypatch):
-    class FakeResponse:
-        status_code = 200
-
-        def iter_lines(self):
-            yield (
-                'data: {"choices":[{"delta":{"content":"A"}}],'
-                '"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}'
-            )
-            yield (
-                'data: {"choices":[{"delta":{"content":"B"}}],'
-                '"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}'
-            )
-            yield "data: [DONE]"
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-    monkeypatch.setattr(httpx, "stream", lambda *args, **kwargs: FakeResponse())
-    holder: dict = {"usage": None}
-    chunks = list(
-        iter_rodium_deltas(
-            [{"role": "user", "content": "hi"}],
-            url="https://example.invalid",
-            api_key="test-key",
-            model="openai/gpt-4o",
-            usage_holder=holder,
-        )
+    _patch_async_stream(
+        monkeypatch,
+        [
+            'data: {"choices":[{"delta":{"content":"A"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}',
+            'data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}',
+            "data: [DONE]",
+        ],
     )
-    assert chunks == ["A", "B"]
+    holder: dict = {"usage": None}
+
+    async def collect():
+        return [
+            chunk
+            async for chunk in iter_rodium_deltas(
+                [{"role": "user", "content": "hi"}],
+                url="https://example.invalid",
+                api_key="test-key",
+                model="openai/gpt-4o",
+                usage_holder=holder,
+            )
+        ]
+
+    chunks = asyncio.run(collect())
+    assert chunks == ["A"]
     assert holder["usage"] == {
         "prompt_tokens": 10,
         "completion_tokens": 5,

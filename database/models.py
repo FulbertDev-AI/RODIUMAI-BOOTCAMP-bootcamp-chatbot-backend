@@ -15,7 +15,7 @@ class Conversation(Base):
 
 class Message(Base):
     __tablename__ = "messages"
-    # Constraints are named explicitly so Alembic can recreate them in SQLite batch mode.
+    # Constraints are named explicitly so Alembic can recreate them reliably across dialects.
     # The unique (conversation_id, seq) pair also rejects two requests writing the same turn concurrently.
     __table_args__ = (
         UniqueConstraint("conversation_id", "seq", name="uq_messages_conversation_id_seq"),

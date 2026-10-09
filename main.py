@@ -1,10 +1,10 @@
 import os
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import and_, select
@@ -14,11 +14,13 @@ from sqlalchemy.orm import Session
 from database.db import get_db
 from database.models import Conversation, Message
 from llm_stream import (
+    LLMStreamCancelled,
     LLMStreamError,
     LLMStreamInterrupted,
     SSE_DONE,
     format_sse,
     iter_rodium_deltas,
+    iterate_text_deltas,
 )
 
 load_dotenv()
@@ -229,8 +231,9 @@ def create_note(
     )
 
 
-def _chat_sse(
+async def _chat_sse(
     *,
+    request: Request,
     db: Session,
     conversation_id: int,
     user_content: str,
@@ -238,21 +241,37 @@ def _chat_sse(
     history_len: int,
     next_seq: int,
     model: str,
-) -> Iterator[str]:
+) -> AsyncIterator[str]:
     # Accumulate assistant text in memory only. Persist user/assistant/notification after a
     # complete upstream stream AND a successful commit; only then emit type=done.
     parts: list[str] = []
     usage_holder: dict = {"usage": None}
+
+    async def cancelled() -> bool:
+        return await request.is_disconnected()
+
     try:
-        for content in iter_rodium_deltas(
-            messages,
-            url=RODIUMAI_URL,
-            api_key=RODIUMAI_API_KEY,
-            model=model,
-            usage_holder=usage_holder,
+        async for content in iterate_text_deltas(
+            iter_rodium_deltas(
+                messages,
+                url=RODIUMAI_URL,
+                api_key=RODIUMAI_API_KEY,
+                model=model,
+                usage_holder=usage_holder,
+                cancelled=cancelled,
+            )
         ):
+            if await cancelled():
+                db.rollback()
+                return
             parts.append(content)
             yield format_sse({"type": "delta", "content": content})
+            if await cancelled():
+                db.rollback()
+                return
+    except LLMStreamCancelled:
+        db.rollback()
+        return
     except GeneratorExit:
         db.rollback()
         raise
@@ -263,6 +282,10 @@ def _chat_sse(
     except LLMStreamInterrupted:
         yield format_sse({"type": "error", "message": "The LLM stream was interrupted."})
         yield format_sse(SSE_DONE)
+        return
+
+    if await cancelled():
+        db.rollback()
         return
 
     reply = "".join(parts)
@@ -310,7 +333,9 @@ def _chat_sse(
 
 
 @app.post("/chat")
-def chat(req: ChatRequest, db: Session = Depends(get_db)) -> StreamingResponse:
+async def chat(
+    req: ChatRequest, request: Request, db: Session = Depends(get_db)
+) -> StreamingResponse:
     # 400/404/422 happen before the SSE body. After StreamingResponse starts, errors are SSE events.
     model = require_allowed_model(req.model)
     rows = load_messages(db, req.conversation_id)
@@ -320,6 +345,7 @@ def chat(req: ChatRequest, db: Session = Depends(get_db)) -> StreamingResponse:
 
     return StreamingResponse(
         _chat_sse(
+            request=request,
             db=db,
             conversation_id=req.conversation_id,
             user_content=req.message,

@@ -5,7 +5,7 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 load_dotenv()
 
-# Format MySQL : mysql+pymysql://:@:/
+# Format : postgresql+psycopg://USER:PASSWORD@HOST:PORT/DATABASE
 DATABASE_URL = os.environ["DATABASE_URL"]
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)

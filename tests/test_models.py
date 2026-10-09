@@ -48,37 +48,55 @@ def test_valid_model_is_forwarded_with_stream_true(client, monkeypatch):
 
 
 def test_iter_rodium_deltas_sends_stream_true(monkeypatch):
+    import asyncio
+
     seen: dict = {}
 
     class FakeResponse:
         status_code = 200
 
-        def iter_lines(self):
+        async def aiter_lines(self):
             yield 'data: {"choices":[{"delta":{"content":"Hi"}}]}'
             yield "data: [DONE]"
 
-        def __enter__(self):
+        async def __aenter__(self):
             return self
 
-        def __exit__(self, *args):
+        async def __aexit__(self, *args):
             return False
 
-    def fake_stream(method, url, **kwargs):
-        seen["json"] = kwargs["json"]
-        return FakeResponse()
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
 
-    monkeypatch.setattr(httpx, "stream", fake_stream)
-    chunks = list(
-        iter_rodium_deltas(
-            [{"role": "user", "content": "hi"}],
-            url="https://api.rodiumai.io/v1/chat/completions",
-            api_key="test-key",
-            model="openai/gpt-4o",
-        )
-    )
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def stream(self, method, url, **kwargs):
+            seen["json"] = kwargs["json"]
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    async def collect():
+        return [
+            chunk
+            async for chunk in iter_rodium_deltas(
+                [{"role": "user", "content": "hi"}],
+                url="https://api.rodiumai.io/v1/chat/completions",
+                api_key="test-key",
+                model="openai/gpt-4o",
+            )
+        ]
+
+    chunks = asyncio.run(collect())
     assert chunks == ["Hi"]
     assert seen["json"]["model"] == "openai/gpt-4o"
     assert seen["json"]["stream"] is True
+    assert seen["json"]["stream_options"] == {"include_usage": True}
 
 
 def test_each_allowed_model_can_be_used(client, monkeypatch):

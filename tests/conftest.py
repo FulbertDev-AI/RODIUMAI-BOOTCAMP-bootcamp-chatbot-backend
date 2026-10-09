@@ -1,6 +1,6 @@
 import os
 
-# Set before any app import so load_dotenv does not require a real key or MySQL.
+# Set before any app import so load_dotenv does not require a real key or live database.
 os.environ["RODIUMAI_API_KEY"] = "test-key"
 os.environ["DATABASE_URL"] = "sqlite://"
 
