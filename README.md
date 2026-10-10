@@ -4,6 +4,7 @@ API FastAPI du tuteur Python **Study Buddy**. Elle persiste les conversations, f
 
 Le frontend est un dépôt **séparé** (React + TypeScript + Vite) :
 
+- Chatbot en ligne : [https://study-buddy-ashy-pi.vercel.app/](https://study-buddy-ashy-pi.vercel.app/)
 - Backend : [https://github.com/FulbertDev-AI/RODIUMAI-BOOTCAMP-bootcamp-chatbot-backend.git](https://github.com/FulbertDev-AI/RODIUMAI-BOOTCAMP-bootcamp-chatbot-backend.git)
 - Frontend : [https://github.com/FulbertDev-AI/RODIUMAI-BOOTCAMP-bootcamp-chatbot-frontend.git](https://github.com/FulbertDev-AI/RODIUMAI-BOOTCAMP-bootcamp-chatbot-frontend.git)
 
@@ -301,7 +302,7 @@ uv run pytest -v tests/test_postgres.py
 
 ## Bonus
 
-**Déploiement public : non réalisé** dans ce dépôt.
+**Déploiement public :** frontend [Vercel](https://study-buddy-ashy-pi.vercel.app/), backend [Render](https://study-buddy-backend-ds6g.onrender.com).
 
 | Bonus | Où | Comportement réel |
 |---|---|---|
